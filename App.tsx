@@ -580,7 +580,7 @@ function App() {
                     />
                     <button
                       onClick={() => setToolMode('eyedropper')}
-                      className={`w-8 h-8 rounded border-2 flex items-center justify-center transition ${toolMode === 'eyedropper' ? 'border-orange-500 bg-orange-100' : 'border-slate-300 bg-white hover:bg-slate-50'}`}
+                      className="w-8 h-8 rounded border-2 flex items-center justify-center transition border-slate-300 bg-white hover:bg-orange-50 hover:border-orange-300"
                       title="画像から色を取得"
                     >
                       <Pipette className="w-4 h-4 text-slate-600" />
