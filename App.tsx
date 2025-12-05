@@ -11,7 +11,9 @@ import {
   MousePointer2,
   Circle,
   Undo2,
-  Pipette
+  Pipette,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { SignboardData, SignboardType, Position, Size } from './types';
 import SignboardCanvas from './components/SignboardCanvas';
@@ -28,7 +30,7 @@ const INITIAL_DATA: SignboardData = {
 const DEFAULT_BOARD_WIDTH = 240;
 const DEFAULT_BOARD_HEIGHT = 180;
 
-type ToolMode = 'select' | 'eraser' | 'eyedropper';
+type ToolMode = 'select' | 'eraser' | 'eyedropper' | 'text';
 type EraserType = 'blur' | 'fill';
 
 interface EraserStroke {
@@ -36,6 +38,15 @@ interface EraserStroke {
   brushSize: number;
   eraserType: EraserType;
   fillColor: string;
+}
+
+interface TextLabel {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  fontSize: number;
+  color: string;
 }
 
 function App() {
@@ -57,6 +68,13 @@ function App() {
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentStroke, setCurrentStroke] = useState<{ x: number; y: number }[]>([]);
   
+  // テキストラベル用ステート
+  const [textLabels, setTextLabels] = useState<TextLabel[]>([]);
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+  const [newTextContent, setNewTextContent] = useState('');
+  const [newTextFontSize, setNewTextFontSize] = useState(24);
+  const [newTextColor, setNewTextColor] = useState('#000000');
+  
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const signboardRef = useRef<HTMLDivElement>(null);
@@ -64,6 +82,7 @@ function App() {
   const imageRef = useRef<HTMLImageElement>(null);
   const draggingRef = useRef({ isDragging: false, startX: 0, startY: 0, initialX: 0, initialY: 0 });
   const resizingRef = useRef({ isResizing: false, startX: 0, startY: 0, initialW: 0, initialH: 0 });
+  const textDraggingRef = useRef({ isDragging: false, textId: '', startX: 0, startY: 0, initialX: 0, initialY: 0 });
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -74,6 +93,8 @@ function App() {
           setImageSrc(event.target.result as string);
           setBoardPos({ x: 20, y: 20 });
           setEraserStrokes([]); // 画像変更時にストロークをリセット
+          setTextLabels([]); // 画像変更時にテキストラベルをリセット
+          setSelectedTextId(null);
         }
       };
       reader.readAsDataURL(file);
@@ -231,6 +252,53 @@ function App() {
     setEraserStrokes(prev => prev.slice(0, -1));
   };
 
+  // テキストラベル追加
+  const handleAddText = () => {
+    if (!newTextContent.trim()) return;
+    
+    const newLabel: TextLabel = {
+      id: `text-${Date.now()}`,
+      text: newTextContent,
+      x: 50,
+      y: 50,
+      fontSize: newTextFontSize,
+      color: newTextColor
+    };
+    
+    setTextLabels(prev => [...prev, newLabel]);
+    setNewTextContent('');
+    setToolMode('select');
+  };
+
+  // テキストラベル削除
+  const handleDeleteText = (id: string) => {
+    setTextLabels(prev => prev.filter(label => label.id !== id));
+    setSelectedTextId(null);
+  };
+
+  // テキストラベル更新
+  const handleUpdateText = (id: string, updates: Partial<TextLabel>) => {
+    setTextLabels(prev => prev.map(label => 
+      label.id === id ? { ...label, ...updates } : label
+    ));
+  };
+
+  // テキストラベルのドラッグ開始
+  const handleTextPointerDown = (e: React.PointerEvent, label: TextLabel) => {
+    if (toolMode !== 'select') return;
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedTextId(label.id);
+    textDraggingRef.current = {
+      isDragging: true,
+      textId: label.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      initialX: label.x,
+      initialY: label.y
+    };
+  };
+
   const handleDownload = async () => {
     if (!imageSrc || !containerRef.current) return;
     
@@ -286,18 +354,18 @@ function App() {
       });
     }
 
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const imageElement = containerRef.current.querySelector('img') || canvasRef.current;
+    if (!imageElement) return;
+
+    const displayedRect = imageElement.getBoundingClientRect();
+    const scaleX = img.naturalWidth / displayedRect.width;
+    const scaleY = img.naturalHeight / displayedRect.height;
+    const offsetX = displayedRect.left - containerRect.left;
+    const offsetY = displayedRect.top - containerRect.top;
+
     // 看板が表示されている場合のみ描画
     if (showBoard) {
-      const containerRect = containerRef.current.getBoundingClientRect();
-      const imageElement = containerRef.current.querySelector('img') || canvasRef.current;
-      if (!imageElement) return;
-
-      const displayedRect = imageElement.getBoundingClientRect();
-      const scaleX = img.naturalWidth / displayedRect.width;
-      const scaleY = img.naturalHeight / displayedRect.height;
-      const offsetX = displayedRect.left - containerRect.left;
-      const offsetY = displayedRect.top - containerRect.top;
-
       const boardRealX = (boardPos.x - offsetX) * scaleX;
       const boardRealY = (boardPos.y - offsetY) * scaleY;
       const boardRealW = boardSize.width * scaleX;
@@ -305,6 +373,30 @@ function App() {
 
       drawSignboardOnCanvas(ctx, boardRealX, boardRealY, boardRealW, boardRealH, boardData, boardType);
     }
+
+    // テキストラベルを描画
+    textLabels.forEach(label => {
+      const textRealX = (label.x - offsetX) * scaleX;
+      const textRealY = (label.y - offsetY) * scaleY;
+      const textRealFontSize = label.fontSize * scaleX;
+      
+      ctx.save();
+      ctx.font = `bold ${textRealFontSize}px "Noto Sans JP", sans-serif`;
+      ctx.fillStyle = label.color;
+      ctx.textBaseline = 'top';
+      
+      // テキストシャドウ効果
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur = 4 * scaleX;
+      ctx.shadowOffsetX = 2 * scaleX;
+      ctx.shadowOffsetY = 2 * scaleX;
+      
+      const lines = label.text.split('\n');
+      lines.forEach((line, index) => {
+        ctx.fillText(line, textRealX, textRealY + (index * textRealFontSize * 1.2));
+      });
+      ctx.restore();
+    });
 
     const link = document.createElement('a');
     link.download = `genba-photo-${Date.now()}.jpg`;
@@ -401,11 +493,20 @@ function App() {
       const dy = e.clientY - resizingRef.current.startY;
       setBoardSize({ width: Math.max(100, resizingRef.current.initialW + dx), height: Math.max(80, resizingRef.current.initialH + dy) });
     }
+    if (textDraggingRef.current.isDragging) {
+      const dx = e.clientX - textDraggingRef.current.startX;
+      const dy = e.clientY - textDraggingRef.current.startY;
+      handleUpdateText(textDraggingRef.current.textId, {
+        x: textDraggingRef.current.initialX + dx,
+        y: textDraggingRef.current.initialY + dy
+      });
+    }
   }, [boardSize]);
 
   const handlePointerUp = useCallback(() => {
     draggingRef.current.isDragging = false;
     resizingRef.current.isResizing = false;
+    textDraggingRef.current.isDragging = false;
     setIsResizing(false);
   }, []);
 
@@ -464,6 +565,27 @@ function App() {
                 )}
               </div>
             )}
+            
+            {/* テキストラベル */}
+            {textLabels.map(label => (
+              <div
+                key={label.id}
+                className={`absolute touch-none ${toolMode === 'select' ? 'cursor-move' : 'pointer-events-none'} ${selectedTextId === label.id ? 'ring-2 ring-blue-500 ring-offset-1' : ''}`}
+                style={{
+                  left: label.x,
+                  top: label.y,
+                  fontSize: label.fontSize,
+                  color: label.color,
+                  fontFamily: '"Noto Sans JP", sans-serif',
+                  fontWeight: 'bold',
+                  textShadow: '1px 1px 2px rgba(0,0,0,0.5), -1px -1px 2px rgba(255,255,255,0.5)',
+                  whiteSpace: 'pre-wrap'
+                }}
+                onPointerDown={(e) => handleTextPointerDown(e, label)}
+              >
+                {label.text}
+              </div>
+            ))}
           </div>
         ) : (
           <div className="text-center p-10 border-4 border-dashed border-slate-300 rounded-xl text-slate-400">
@@ -487,20 +609,159 @@ function App() {
           {imageSrc && (
             <div className="space-y-2">
               <label className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1"><MousePointer2 className="w-3 h-3" /> ツール</label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   onClick={() => setToolMode('select')}
-                  className={`h-10 rounded border-2 flex items-center justify-center gap-2 font-bold text-xs transition ${toolMode === 'select' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-400'}`}
+                  className={`h-10 rounded border-2 flex items-center justify-center gap-1 font-bold text-xs transition ${toolMode === 'select' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-400'}`}
                 >
                   <MousePointer2 className="w-4 h-4" /> 選択
                 </button>
                 <button
                   onClick={() => setToolMode('eraser')}
-                  className={`h-10 rounded border-2 flex items-center justify-center gap-2 font-bold text-xs transition ${toolMode === 'eraser' ? 'border-orange-500 bg-orange-50 text-orange-600' : 'border-slate-200 text-slate-400'}`}
+                  className={`h-10 rounded border-2 flex items-center justify-center gap-1 font-bold text-xs transition ${toolMode === 'eraser' ? 'border-orange-500 bg-orange-50 text-orange-600' : 'border-slate-200 text-slate-400'}`}
                 >
                   <Eraser className="w-4 h-4" /> 消しゴム
                 </button>
+                <button
+                  onClick={() => setToolMode('text')}
+                  className={`h-10 rounded border-2 flex items-center justify-center gap-1 font-bold text-xs transition ${toolMode === 'text' ? 'border-purple-500 bg-purple-50 text-purple-600' : 'border-slate-200 text-slate-400'}`}
+                >
+                  <Type className="w-4 h-4" /> テキスト
+                </button>
               </div>
+            </div>
+          )}
+
+          {/* テキスト追加設定 */}
+          {imageSrc && toolMode === 'text' && (
+            <div className="space-y-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
+              <label className="text-xs font-bold text-purple-700 uppercase tracking-wider flex items-center gap-1">
+                <Type className="w-3 h-3" /> テキスト追加
+              </label>
+              
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500">テキスト内容</label>
+                <textarea
+                  value={newTextContent}
+                  onChange={(e) => setNewTextContent(e.target.value)}
+                  placeholder="入力してください..."
+                  rows={2}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none resize-none"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 flex items-center justify-between">
+                  <span>文字サイズ</span>
+                  <span className="text-purple-600">{newTextFontSize}px</span>
+                </label>
+                <input
+                  type="range"
+                  min="12"
+                  max="72"
+                  value={newTextFontSize}
+                  onChange={(e) => setNewTextFontSize(parseInt(e.target.value))}
+                  className="w-full h-2 bg-white rounded-lg appearance-none cursor-pointer accent-purple-500"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500">文字色</label>
+                <div className="flex gap-2 flex-wrap items-center">
+                  {['#000000', '#ffffff', '#ff0000', '#0000ff', '#008000'].map(color => (
+                    <button
+                      key={color}
+                      onClick={() => setNewTextColor(color)}
+                      className={`w-8 h-8 rounded border-2 transition ${newTextColor === color ? 'border-purple-500 scale-110' : 'border-slate-300'}`}
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={newTextColor}
+                    onChange={(e) => setNewTextColor(e.target.value)}
+                    className="w-8 h-8 rounded cursor-pointer border-2 border-slate-300"
+                  />
+                </div>
+              </div>
+              
+              <button
+                onClick={handleAddText}
+                disabled={!newTextContent.trim()}
+                className={`w-full h-10 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition ${newTextContent.trim() ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-slate-200 text-slate-400'}`}
+              >
+                <Plus className="w-4 h-4" /> テキストを追加
+              </button>
+            </div>
+          )}
+
+          {/* 選択中のテキスト編集 */}
+          {imageSrc && toolMode === 'select' && selectedTextId && (
+            <div className="space-y-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-blue-700 uppercase tracking-wider flex items-center gap-1">
+                  <Type className="w-3 h-3" /> テキスト編集
+                </label>
+                <button
+                  onClick={() => handleDeleteText(selectedTextId)}
+                  className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 transition"
+                >
+                  <Trash2 className="w-3 h-3" /> 削除
+                </button>
+              </div>
+              
+              {(() => {
+                const label = textLabels.find(l => l.id === selectedTextId);
+                if (!label) return null;
+                return (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500">テキスト内容</label>
+                      <textarea
+                        value={label.text}
+                        onChange={(e) => handleUpdateText(label.id, { text: e.target.value })}
+                        rows={2}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                      />
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 flex items-center justify-between">
+                        <span>文字サイズ</span>
+                        <span className="text-blue-600">{label.fontSize}px</span>
+                      </label>
+                      <input
+                        type="range"
+                        min="12"
+                        max="72"
+                        value={label.fontSize}
+                        onChange={(e) => handleUpdateText(label.id, { fontSize: parseInt(e.target.value) })}
+                        className="w-full h-2 bg-white rounded-lg appearance-none cursor-pointer accent-blue-500"
+                      />
+                    </div>
+                    
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500">文字色</label>
+                      <div className="flex gap-2 flex-wrap items-center">
+                        {['#000000', '#ffffff', '#ff0000', '#0000ff', '#008000'].map(color => (
+                          <button
+                            key={color}
+                            onClick={() => handleUpdateText(label.id, { color })}
+                            className={`w-8 h-8 rounded border-2 transition ${label.color === color ? 'border-blue-500 scale-110' : 'border-slate-300'}`}
+                            style={{ backgroundColor: color }}
+                          />
+                        ))}
+                        <input
+                          type="color"
+                          value={label.color}
+                          onChange={(e) => handleUpdateText(label.id, { color: e.target.value })}
+                          className="w-8 h-8 rounded cursor-pointer border-2 border-slate-300"
+                        />
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
 
