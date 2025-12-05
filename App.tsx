@@ -175,7 +175,7 @@ function App() {
   }, [eraserStrokes, currentStroke, brushSize, eraserType, fillColor]);
 
   useEffect(() => {
-    if (imageSrc && (toolMode === 'eraser' || toolMode === 'eyedropper')) {
+    if (imageSrc && (eraserStrokes.length > 0 || toolMode === 'eraser' || toolMode === 'eyedropper')) {
       drawEraserCanvas();
     }
   }, [imageSrc, toolMode, eraserStrokes, currentStroke, drawEraserCanvas]);
@@ -524,20 +524,20 @@ function App() {
       <div className="flex-1 relative bg-slate-200 flex items-center justify-center overflow-hidden p-4">
         {imageSrc ? (
           <div ref={containerRef} className="relative shadow-xl overflow-hidden bg-black" style={{ maxHeight: '90vh', maxWidth: '100%' }}>
-            {/* 元画像（非表示だが参照用） */}
+            {/* 元画像（Canvasが表示される場合は非表示だが参照用） */}
             <img 
               ref={imageRef}
               src={imageSrc} 
               alt="Work site" 
-              className={`block max-h-[85vh] max-w-full object-contain select-none ${toolMode === 'eraser' ? 'invisible' : 'pointer-events-none'}`}
+              className={`block max-h-[85vh] max-w-full object-contain select-none ${(eraserStrokes.length > 0 || toolMode === 'eraser' || toolMode === 'eyedropper') ? 'invisible' : 'pointer-events-none'}`}
               onLoad={() => drawEraserCanvas()}
             />
             
-            {/* 消しゴム/スポイト用Canvas */}
-            {(toolMode === 'eraser' || toolMode === 'eyedropper') && (
+            {/* 消しゴム/スポイト用Canvas（ストロークがある場合は常に表示） */}
+            {(eraserStrokes.length > 0 || toolMode === 'eraser' || toolMode === 'eyedropper') && (
               <canvas
                 ref={canvasRef}
-                className={`absolute top-0 left-0 touch-none ${toolMode === 'eyedropper' ? 'cursor-cell' : 'cursor-crosshair'}`}
+                className={`absolute top-0 left-0 touch-none ${toolMode === 'eyedropper' ? 'cursor-cell' : toolMode === 'eraser' ? 'cursor-crosshair' : 'pointer-events-none'}`}
                 onPointerDown={handleCanvasPointerDown}
                 onPointerMove={handleCanvasPointerMove}
                 onPointerUp={handleCanvasPointerUp}
