@@ -7,7 +7,11 @@ import {
   MapPin, 
   Image as ImageIcon,
   Eraser,
-  Palette
+  Palette,
+  MousePointer2,
+  Circle,
+  Undo2,
+  Pipette
 } from 'lucide-react';
 import { SignboardData, SignboardType, Position, Size } from './types';
 import SignboardCanvas from './components/SignboardCanvas';
@@ -24,18 +28,40 @@ const INITIAL_DATA: SignboardData = {
 const DEFAULT_BOARD_WIDTH = 240;
 const DEFAULT_BOARD_HEIGHT = 180;
 
+type ToolMode = 'select' | 'eraser' | 'eyedropper';
+type EraserType = 'blur' | 'fill';
+
+interface EraserStroke {
+  points: { x: number; y: number }[];
+  brushSize: number;
+  eraserType: EraserType;
+  fillColor: string;
+}
+
 function App() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [boardData, setBoardData] = useState<SignboardData>(INITIAL_DATA);
   const [boardType, setBoardType] = useState<SignboardType>(SignboardType.BLACKBOARD);
   const [boardPos, setBoardPos] = useState<Position>({ x: 20, y: 20 });
   const [boardSize, setBoardSize] = useState<Size>({ width: DEFAULT_BOARD_WIDTH, height: DEFAULT_BOARD_HEIGHT });
+  const [showBoard, setShowBoard] = useState(false);
   
   const [isResizing, setIsResizing] = useState(false);
+  
+  // 消しゴム機能用ステート
+  const [toolMode, setToolMode] = useState<ToolMode>('select');
+  const [eraserType, setEraserType] = useState<EraserType>('blur');
+  const [brushSize, setBrushSize] = useState(30);
+  const [fillColor, setFillColor] = useState('#ffffff');
+  const [eraserStrokes, setEraserStrokes] = useState<EraserStroke[]>([]);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [currentStroke, setCurrentStroke] = useState<{ x: number; y: number }[]>([]);
   
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const signboardRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
   const draggingRef = useRef({ isDragging: false, startX: 0, startY: 0, initialX: 0, initialY: 0 });
   const resizingRef = useRef({ isResizing: false, startX: 0, startY: 0, initialW: 0, initialH: 0 });
 
@@ -47,40 +73,238 @@ function App() {
         if (event.target?.result) {
           setImageSrc(event.target.result as string);
           setBoardPos({ x: 20, y: 20 });
+          setEraserStrokes([]); // 画像変更時にストロークをリセット
         }
       };
       reader.readAsDataURL(file);
     }
   };
 
+  // Canvas描画（消しゴム効果適用）
+  const drawEraserCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    const img = imageRef.current;
+    if (!canvas || !img || !img.complete) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Canvas サイズを画像表示サイズに合わせる
+    const rect = img.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+
+    // 画像を描画
+    ctx.drawImage(img, 0, 0, rect.width, rect.height);
+
+    // 消しゴムストロークを描画
+    eraserStrokes.forEach(stroke => {
+      if (stroke.points.length < 2) return;
+      
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = stroke.brushSize;
+
+      if (stroke.eraserType === 'fill') {
+        ctx.strokeStyle = stroke.fillColor;
+        ctx.beginPath();
+        ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+        stroke.points.forEach(point => {
+          ctx.lineTo(point.x, point.y);
+        });
+        ctx.stroke();
+      } else {
+        // ぼかし効果
+        ctx.filter = 'blur(10px)';
+        ctx.strokeStyle = 'rgba(200, 200, 200, 0.8)';
+        ctx.beginPath();
+        ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+        stroke.points.forEach(point => {
+          ctx.lineTo(point.x, point.y);
+        });
+        ctx.stroke();
+        ctx.filter = 'none';
+      }
+      ctx.restore();
+    });
+
+    // 現在描画中のストローク
+    if (currentStroke.length > 1) {
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = brushSize;
+
+      if (eraserType === 'fill') {
+        ctx.strokeStyle = fillColor;
+      } else {
+        ctx.filter = 'blur(10px)';
+        ctx.strokeStyle = 'rgba(200, 200, 200, 0.8)';
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(currentStroke[0].x, currentStroke[0].y);
+      currentStroke.forEach(point => {
+        ctx.lineTo(point.x, point.y);
+      });
+      ctx.stroke();
+      ctx.restore();
+    }
+  }, [eraserStrokes, currentStroke, brushSize, eraserType, fillColor]);
+
+  useEffect(() => {
+    if (imageSrc && (toolMode === 'eraser' || toolMode === 'eyedropper')) {
+      drawEraserCanvas();
+    }
+  }, [imageSrc, toolMode, eraserStrokes, currentStroke, drawEraserCanvas]);
+
+  // スポイトで色を取得
+  const getColorAtPosition = (x: number, y: number): string => {
+    const canvas = canvasRef.current;
+    if (!canvas) return fillColor;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return fillColor;
+    
+    const pixel = ctx.getImageData(x, y, 1, 1).data;
+    const r = pixel[0];
+    const g = pixel[1];
+    const b = pixel[2];
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  };
+
+  // 消しゴム描画ハンドラ
+  const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // スポイトモード
+    if (toolMode === 'eyedropper') {
+      const color = getColorAtPosition(x, y);
+      setFillColor(color);
+      setEraserType('fill');
+      setToolMode('eraser');
+      return;
+    }
+    
+    if (toolMode !== 'eraser') return;
+    
+    setIsDrawing(true);
+    setCurrentStroke([{ x, y }]);
+  };
+
+  const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isDrawing || toolMode !== 'eraser') return;
+    
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    setCurrentStroke(prev => [...prev, { x, y }]);
+  };
+
+  const handleCanvasPointerUp = () => {
+    if (!isDrawing) return;
+    
+    if (currentStroke.length > 1) {
+      setEraserStrokes(prev => [...prev, {
+        points: currentStroke,
+        brushSize,
+        eraserType,
+        fillColor
+      }]);
+    }
+    
+    setIsDrawing(false);
+    setCurrentStroke([]);
+  };
+
+  const handleUndo = () => {
+    setEraserStrokes(prev => prev.slice(0, -1));
+  };
+
   const handleDownload = async () => {
     if (!imageSrc || !containerRef.current) return;
+    
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    
     const img = new Image();
     img.src = imageSrc;
     await new Promise((resolve) => { img.onload = resolve; });
+    
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
     ctx.drawImage(img, 0, 0);
 
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const imageElement = containerRef.current.querySelector('img');
-    if (!imageElement) return;
+    // 消しゴムストロークを実際の画像サイズにスケーリングして描画
+    const displayCanvas = canvasRef.current;
+    if (displayCanvas) {
+      const scaleX = img.naturalWidth / displayCanvas.width;
+      const scaleY = img.naturalHeight / displayCanvas.height;
 
-    const displayedRect = imageElement.getBoundingClientRect();
-    const scaleX = img.naturalWidth / displayedRect.width;
-    const scaleY = img.naturalHeight / displayedRect.height;
-    const offsetX = displayedRect.left - containerRect.left;
-    const offsetY = displayedRect.top - containerRect.top;
+      eraserStrokes.forEach(stroke => {
+        if (stroke.points.length < 2) return;
+        
+        ctx.save();
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = stroke.brushSize * scaleX;
 
-    const boardRealX = (boardPos.x - offsetX) * scaleX;
-    const boardRealY = (boardPos.y - offsetY) * scaleY;
-    const boardRealW = boardSize.width * scaleX;
-    const boardRealH = boardSize.height * scaleY;
+        if (stroke.eraserType === 'fill') {
+          ctx.strokeStyle = stroke.fillColor;
+          ctx.beginPath();
+          ctx.moveTo(stroke.points[0].x * scaleX, stroke.points[0].y * scaleY);
+          stroke.points.forEach(point => {
+            ctx.lineTo(point.x * scaleX, point.y * scaleY);
+          });
+          ctx.stroke();
+        } else {
+          // ぼかしは重ねて描画
+          for (let i = 0; i < 5; i++) {
+            ctx.filter = `blur(${15 * scaleX}px)`;
+            ctx.strokeStyle = 'rgba(180, 180, 180, 0.5)';
+            ctx.beginPath();
+            ctx.moveTo(stroke.points[0].x * scaleX, stroke.points[0].y * scaleY);
+            stroke.points.forEach(point => {
+              ctx.lineTo(point.x * scaleX, point.y * scaleY);
+            });
+            ctx.stroke();
+          }
+          ctx.filter = 'none';
+        }
+        ctx.restore();
+      });
+    }
 
-    drawSignboardOnCanvas(ctx, boardRealX, boardRealY, boardRealW, boardRealH, boardData, boardType);
+    // 看板が表示されている場合のみ描画
+    if (showBoard) {
+      const containerRect = containerRef.current.getBoundingClientRect();
+      const imageElement = containerRef.current.querySelector('img') || canvasRef.current;
+      if (!imageElement) return;
+
+      const displayedRect = imageElement.getBoundingClientRect();
+      const scaleX = img.naturalWidth / displayedRect.width;
+      const scaleY = img.naturalHeight / displayedRect.height;
+      const offsetX = displayedRect.left - containerRect.left;
+      const offsetY = displayedRect.top - containerRect.top;
+
+      const boardRealX = (boardPos.x - offsetX) * scaleX;
+      const boardRealY = (boardPos.y - offsetY) * scaleY;
+      const boardRealW = boardSize.width * scaleX;
+      const boardRealH = boardSize.height * scaleY;
+
+      drawSignboardOnCanvas(ctx, boardRealX, boardRealY, boardRealW, boardRealH, boardData, boardType);
+    }
 
     const link = document.createElement('a');
     link.download = `genba-photo-${Date.now()}.jpg`;
@@ -151,6 +375,8 @@ function App() {
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    if (toolMode !== 'select') return;
+    
     e.preventDefault();
     e.stopPropagation();
     const rect = signboardRef.current?.getBoundingClientRect();
@@ -197,16 +423,47 @@ function App() {
       <div className="flex-1 relative bg-slate-200 flex items-center justify-center overflow-hidden p-4">
         {imageSrc ? (
           <div ref={containerRef} className="relative shadow-xl overflow-hidden bg-black" style={{ maxHeight: '90vh', maxWidth: '100%' }}>
-            <img src={imageSrc} alt="Work site" className="block max-h-[85vh] max-w-full object-contain pointer-events-none select-none" />
-            <div ref={signboardRef} className="absolute cursor-move group touch-none" style={{ left: boardPos.x, top: boardPos.y, width: boardSize.width, height: boardSize.height }} onPointerDown={handlePointerDown}>
-              <SignboardCanvas type={boardType} data={boardData} />
-              <div className="absolute bottom-0 right-0 w-6 h-6 bg-blue-500/50 rounded-tl cursor-nwse-resize opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className="absolute inset-0 border-2 border-blue-500/0 group-hover:border-blue-500/50 pointer-events-none transition-colors" />
-              {/* サイズ表示 */}
-              <div className={`absolute -bottom-8 left-1/2 -translate-x-1/2 px-3 py-1 bg-slate-800 text-white text-xs font-mono rounded shadow-lg whitespace-nowrap transition-opacity ${isResizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-80'}`}>
-                {Math.round(boardSize.width)} × {Math.round(boardSize.height)} px
+            {/* 元画像（非表示だが参照用） */}
+            <img 
+              ref={imageRef}
+              src={imageSrc} 
+              alt="Work site" 
+              className={`block max-h-[85vh] max-w-full object-contain select-none ${toolMode === 'eraser' ? 'invisible' : 'pointer-events-none'}`}
+              onLoad={() => drawEraserCanvas()}
+            />
+            
+            {/* 消しゴム/スポイト用Canvas */}
+            {(toolMode === 'eraser' || toolMode === 'eyedropper') && (
+              <canvas
+                ref={canvasRef}
+                className={`absolute top-0 left-0 touch-none ${toolMode === 'eyedropper' ? 'cursor-cell' : 'cursor-crosshair'}`}
+                onPointerDown={handleCanvasPointerDown}
+                onPointerMove={handleCanvasPointerMove}
+                onPointerUp={handleCanvasPointerUp}
+                onPointerLeave={handleCanvasPointerUp}
+              />
+            )}
+            
+            {/* 看板 */}
+            {showBoard && (
+              <div 
+                ref={signboardRef} 
+                className={`absolute group touch-none ${toolMode === 'select' ? 'cursor-move' : 'pointer-events-none'}`}
+                style={{ left: boardPos.x, top: boardPos.y, width: boardSize.width, height: boardSize.height }} 
+                onPointerDown={handlePointerDown}
+              >
+                <SignboardCanvas type={boardType} data={boardData} />
+                {toolMode === 'select' && (
+                  <>
+                    <div className="absolute bottom-0 right-0 w-6 h-6 bg-blue-500/50 rounded-tl cursor-nwse-resize opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <div className="absolute inset-0 border-2 border-blue-500/0 group-hover:border-blue-500/50 pointer-events-none transition-colors" />
+                    <div className={`absolute -bottom-8 left-1/2 -translate-x-1/2 px-3 py-1 bg-slate-800 text-white text-xs font-mono rounded shadow-lg whitespace-nowrap transition-opacity ${isResizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-80'}`}>
+                      {Math.round(boardSize.width)} × {Math.round(boardSize.height)} px
+                    </div>
+                  </>
+                )}
               </div>
-            </div>
+            )}
           </div>
         ) : (
           <div className="text-center p-10 border-4 border-dashed border-slate-300 rounded-xl text-slate-400">
@@ -215,7 +472,9 @@ function App() {
             <button onClick={() => fileInputRef.current?.click()} className="mt-6 px-6 py-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition shadow-lg">フォルダから選択</button>
           </div>
         )}
+        
       </div>
+      
       <div className="w-full md:w-96 bg-white shadow-2xl z-20 flex flex-col h-[50vh] md:h-screen">
         <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
           <h1 className="font-bold text-slate-700 flex items-center gap-2"><HardHat className="w-5 h-5 text-amber-500" />工事用看板エディタ</h1>
@@ -223,12 +482,140 @@ function App() {
         </div>
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
           <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleFileChange} />
+          
+          {/* ツールモード選択 */}
+          {imageSrc && (
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1"><MousePointer2 className="w-3 h-3" /> ツール</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setToolMode('select')}
+                  className={`h-10 rounded border-2 flex items-center justify-center gap-2 font-bold text-xs transition ${toolMode === 'select' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-400'}`}
+                >
+                  <MousePointer2 className="w-4 h-4" /> 選択
+                </button>
+                <button
+                  onClick={() => setToolMode('eraser')}
+                  className={`h-10 rounded border-2 flex items-center justify-center gap-2 font-bold text-xs transition ${toolMode === 'eraser' ? 'border-orange-500 bg-orange-50 text-orange-600' : 'border-slate-200 text-slate-400'}`}
+                >
+                  <Eraser className="w-4 h-4" /> 消しゴム
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 消しゴム設定 */}
+          {imageSrc && toolMode === 'eraser' && (
+            <div className="space-y-4 p-4 bg-orange-50 rounded-lg border border-orange-200">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-orange-700 uppercase tracking-wider flex items-center gap-1">
+                  <Eraser className="w-3 h-3" /> 消しゴム設定
+                </label>
+                {eraserStrokes.length > 0 && (
+                  <button
+                    onClick={handleUndo}
+                    className="text-xs text-orange-600 hover:text-orange-800 flex items-center gap-1 transition"
+                  >
+                    <Undo2 className="w-3 h-3" /> 戻す
+                  </button>
+                )}
+              </div>
+              
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500">タイプ</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setEraserType('blur')}
+                    className={`h-9 rounded border-2 flex items-center justify-center font-bold text-xs transition ${eraserType === 'blur' ? 'border-orange-500 bg-white text-orange-600' : 'border-slate-200 bg-white text-slate-400'}`}
+                  >
+                    ぼかし
+                  </button>
+                  <button
+                    onClick={() => setEraserType('fill')}
+                    className={`h-9 rounded border-2 flex items-center justify-center font-bold text-xs transition ${eraserType === 'fill' ? 'border-orange-500 bg-white text-orange-600' : 'border-slate-200 bg-white text-slate-400'}`}
+                  >
+                    塗りつぶし
+                  </button>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 flex items-center justify-between">
+                  <span className="flex items-center gap-1"><Circle className="w-3 h-3" /> ブラシサイズ</span>
+                  <span className="text-orange-600">{brushSize}px</span>
+                </label>
+                <input
+                  type="range"
+                  min="5"
+                  max="100"
+                  value={brushSize}
+                  onChange={(e) => setBrushSize(parseInt(e.target.value))}
+                  className="w-full h-2 bg-white rounded-lg appearance-none cursor-pointer accent-orange-500"
+                />
+              </div>
+              
+              {eraserType === 'fill' && (
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500 flex items-center justify-between">
+                    <span>塗りつぶし色</span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-4 h-4 rounded border border-slate-300" style={{ backgroundColor: fillColor }}></span>
+                      <span className="text-[10px] text-slate-400 font-mono">{fillColor}</span>
+                    </span>
+                  </label>
+                  <div className="flex gap-2 flex-wrap items-center">
+                    {['#ffffff', '#000000', '#808080', '#d1d5db'].map(color => (
+                      <button
+                        key={color}
+                        onClick={() => setFillColor(color)}
+                        className={`w-8 h-8 rounded border-2 transition ${fillColor === color ? 'border-orange-500 scale-110' : 'border-slate-300'}`}
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                    <input
+                      type="color"
+                      value={fillColor}
+                      onChange={(e) => setFillColor(e.target.value)}
+                      className="w-8 h-8 rounded cursor-pointer border-2 border-slate-300"
+                    />
+                    <button
+                      onClick={() => setToolMode('eyedropper')}
+                      className={`w-8 h-8 rounded border-2 flex items-center justify-center transition ${toolMode === 'eyedropper' ? 'border-orange-500 bg-orange-100' : 'border-slate-300 bg-white hover:bg-slate-50'}`}
+                      title="画像から色を取得"
+                    >
+                      <Pipette className="w-4 h-4 text-slate-600" />
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400">💡 スポイトで画像から色を取得できます</p>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1"><Palette className="w-3 h-3" /> 看板スタイル</label>
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => setBoardType(SignboardType.BLACKBOARD)} className={`h-10 rounded border-2 flex items-center justify-center font-bold text-xs transition ${boardType === SignboardType.BLACKBOARD ? 'border-emerald-800 bg-emerald-900 text-white' : 'border-slate-200 text-slate-400'}`}>黒板 (標準)</button>
-              <button onClick={() => setBoardType(SignboardType.WHITE)} className={`h-10 rounded border-2 flex items-center justify-center font-bold text-xs transition ${boardType === SignboardType.WHITE ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-400'}`}>ホワイト</button>
+              <button 
+                onClick={() => { setBoardType(SignboardType.BLACKBOARD); setShowBoard(true); }} 
+                className={`h-10 rounded border-2 flex items-center justify-center font-bold text-xs transition ${showBoard && boardType === SignboardType.BLACKBOARD ? 'border-emerald-800 bg-emerald-900 text-white' : 'border-slate-200 text-slate-400 hover:border-emerald-300 hover:text-emerald-600'}`}
+              >
+                黒板 (標準)
+              </button>
+              <button 
+                onClick={() => { setBoardType(SignboardType.WHITE); setShowBoard(true); }} 
+                className={`h-10 rounded border-2 flex items-center justify-center font-bold text-xs transition ${showBoard && boardType === SignboardType.WHITE ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-slate-200 text-slate-400 hover:border-blue-300 hover:text-blue-600'}`}
+              >
+                ホワイト
+              </button>
             </div>
+            {showBoard && (
+              <button 
+                onClick={() => setShowBoard(false)} 
+                className="w-full h-8 rounded border border-red-200 text-red-400 hover:bg-red-50 hover:text-red-500 text-xs transition"
+              >
+                看板を非表示にする
+              </button>
+            )}
           </div>
           <div className="space-y-4">
             <div className="space-y-1">
