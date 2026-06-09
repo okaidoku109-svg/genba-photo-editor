@@ -13,10 +13,42 @@ import {
   Undo2,
   Pipette,
   Plus,
-  Trash2
+  Trash2,
+  AlignLeft,
+  AlignCenter,
+  AlignRight
 } from 'lucide-react';
-import { SignboardData, SignboardType, Position, Size } from './types';
+import { SignboardData, SignboardType, Position, Size, TextAlign } from './types';
 import SignboardCanvas from './components/SignboardCanvas';
+import { SIGNBOARD_LAYOUT, getSignboardFontSizes, getCanvasAlignX } from './utils/signboardLayout';
+
+const TEXT_ALIGN_OPTIONS: { value: TextAlign; icon: typeof AlignLeft; label: string }[] = [
+  { value: 'left', icon: AlignLeft, label: '左揃え' },
+  { value: 'center', icon: AlignCenter, label: '中央揃え' },
+  { value: 'right', icon: AlignRight, label: '右揃え' },
+];
+
+const TextAlignButtons: React.FC<{
+  value: TextAlign;
+  onChange: (align: TextAlign) => void;
+  accentClass?: string;
+}> = ({ value, onChange, accentClass = 'border-blue-600 bg-blue-50 text-blue-700' }) => (
+  <div className="flex gap-1">
+    {TEXT_ALIGN_OPTIONS.map(({ value: align, icon: Icon, label }) => (
+      <button
+        key={align}
+        type="button"
+        title={label}
+        onClick={() => onChange(align)}
+        className={`flex-1 h-9 rounded-lg border-2 flex items-center justify-center transition ${
+          value === align ? accentClass : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'
+        }`}
+      >
+        <Icon className="w-4 h-4" />
+      </button>
+    ))}
+  </div>
+);
 
 const INITIAL_DATA: SignboardData = {
   title: "",
@@ -25,6 +57,7 @@ const INITIAL_DATA: SignboardData = {
   fontSizeTitle: 1.0,
   fontSizeItem: 1.0,
   fontSizeDetails: 1.0,
+  textAlign: 'left',
 };
 
 const DEFAULT_BOARD_WIDTH = 240;
@@ -47,6 +80,7 @@ interface TextLabel {
   y: number;
   fontSize: number;
   color: string;
+  textAlign: TextAlign;
 }
 
 function App() {
@@ -74,6 +108,7 @@ function App() {
   const [newTextContent, setNewTextContent] = useState('');
   const [newTextFontSize, setNewTextFontSize] = useState(24);
   const [newTextColor, setNewTextColor] = useState('#000000');
+  const [newTextAlign, setNewTextAlign] = useState<TextAlign>('left');
   
   const containerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -262,7 +297,8 @@ function App() {
       x: 50,
       y: 50,
       fontSize: newTextFontSize,
-      color: newTextColor
+      color: newTextColor,
+      textAlign: newTextAlign,
     };
     
     setTextLabels(prev => [...prev, newLabel]);
@@ -384,6 +420,7 @@ function App() {
       ctx.font = `bold ${textRealFontSize}px "Noto Sans JP", sans-serif`;
       ctx.fillStyle = label.color;
       ctx.textBaseline = 'top';
+      ctx.textAlign = label.textAlign ?? 'left';
       
       // テキストシャドウ効果
       ctx.shadowColor = 'rgba(0,0,0,0.5)';
@@ -404,23 +441,48 @@ function App() {
     link.click();
   };
 
+  const fitTextToWidth = (
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    maxWidth: number,
+    fontSize: number,
+    fontFamily: string,
+    bold = false
+  ): number => {
+    let size = fontSize;
+    const weight = bold ? 'bold ' : '';
+    while (size > 4) {
+      ctx.font = `${weight}${size}px ${fontFamily}`;
+      if (ctx.measureText(text).width <= maxWidth) break;
+      size--;
+    }
+    return size;
+  };
+
   const drawSignboardOnCanvas = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, data: SignboardData, type: SignboardType) => {
     ctx.save();
-    let bgColor = type === SignboardType.BLACKBOARD ? '#004d40' : '#ffffff';
-    let textColor = type === SignboardType.BLACKBOARD ? '#ffffff' : '#0f172a';
-    let lineColor = type === SignboardType.BLACKBOARD ? '#ffffff' : '#0f172a';
-    
+    ctx.beginPath();
+    ctx.rect(x, y, w, h);
+    ctx.clip();
+
+    const bgColor = type === SignboardType.BLACKBOARD ? '#004d40' : '#ffffff';
+    const textColor = type === SignboardType.BLACKBOARD ? '#ffffff' : '#0f172a';
+    const lineColor = type === SignboardType.BLACKBOARD ? '#ffffff' : '#0f172a';
+    const fontName = type === SignboardType.BLACKBOARD ? '"Noto Sans JP", serif' : '"Noto Sans JP", sans-serif';
+    const fonts = getSignboardFontSizes(h, data);
+
     ctx.fillStyle = bgColor;
     ctx.fillRect(x, y, w, h);
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = w * 0.01;
     ctx.strokeRect(x, y, w, h);
+    ctx.lineWidth = w * 0.005;
 
-    const fontName = type === SignboardType.BLACKBOARD ? '"Noto Sans JP", serif' : '"Noto Sans JP", sans-serif';
-    ctx.lineWidth = w * 0.005; 
-    
-    const headerH = h * 0.30;
+    const headerH = h * SIGNBOARD_LAYOUT.headerRatio;
     const rowH = headerH / 2;
+    const divX = x + w * SIGNBOARD_LAYOUT.labelColRatio;
+    const fieldPadX = w * 0.02;
+    const fieldMaxWidth = w * (1 - SIGNBOARD_LAYOUT.labelColRatio) - fieldPadX * 2;
 
     ctx.beginPath();
     ctx.moveTo(x, y + headerH);
@@ -432,7 +494,6 @@ function App() {
     ctx.lineTo(x + w, y + rowH);
     ctx.stroke();
 
-    const divX = x + (w * 0.20);
     ctx.beginPath();
     ctx.moveTo(divX, y);
     ctx.lineTo(divX, y + headerH);
@@ -441,28 +502,45 @@ function App() {
     ctx.fillStyle = textColor;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
-    ctx.font = `bold ${Math.floor(h * 0.06)}px ${fontName}`;
-    ctx.fillText("工事名", x + (w * 0.1), y + (rowH * 0.5));
-    ctx.fillText("場　所", x + (w * 0.1), y + headerH - (rowH * 0.5));
+    ctx.font = `bold ${fonts.label}px ${fontName}`;
+    ctx.fillText('工事名', x + w * SIGNBOARD_LAYOUT.labelColRatio * 0.5, y + rowH * 0.5);
+    ctx.fillText('場　所', x + w * SIGNBOARD_LAYOUT.labelColRatio * 0.5, y + headerH - rowH * 0.5);
 
-    ctx.textAlign = 'left';
-    ctx.font = `${Math.floor(h * 0.07 * data.fontSizeTitle)}px ${fontName}`;
-    ctx.fillText(data.title, x + (w * 0.22), y + (rowH * 0.5));
-    
-    ctx.font = `${Math.floor(h * 0.07 * data.fontSizeDetails)}px ${fontName}`;
-    ctx.fillText(data.details, x + (w * 0.22), y + headerH - (rowH * 0.5));
+    const fieldX = divX + fieldPadX;
+    const align = data.textAlign ?? 'left';
+    ctx.textAlign = align;
 
-    ctx.textAlign = 'left';
+    const titleSize = fitTextToWidth(ctx, data.title, fieldMaxWidth, fonts.title, fontName);
+    ctx.font = `${titleSize}px ${fontName}`;
+    ctx.fillText(data.title, getCanvasAlignX(fieldX, fieldMaxWidth, align), y + rowH * 0.5);
+
+    const detailsSize = fitTextToWidth(ctx, data.details, fieldMaxWidth, fonts.details, fontName);
+    ctx.font = `${detailsSize}px ${fontName}`;
+    ctx.fillText(data.details, getCanvasAlignX(fieldX, fieldMaxWidth, align), y + headerH - rowH * 0.5);
+
+    const bodyPad = w * SIGNBOARD_LAYOUT.contentPadRatio;
+    const bodyX = x + bodyPad;
+    const bodyY = y + headerH + h * SIGNBOARD_LAYOUT.bodyTopPadRatio;
+    const bodyW = w - bodyPad * 2;
+    const bodyH = h - headerH - h * SIGNBOARD_LAYOUT.bodyTopPadRatio - bodyPad;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(bodyX, bodyY, bodyW, bodyH);
+    ctx.clip();
+
     ctx.textBaseline = 'top';
-    ctx.font = `${Math.floor(h * 0.08 * data.fontSizeItem)}px ${fontName}`;
-    
-    const bodyY = y + headerH + (h * 0.03);
-    const bodyX = x + (w * 0.03);
-    const lineHeight = h * 0.1 * data.fontSizeItem;
+    ctx.textAlign = align;
+    ctx.font = `${fonts.item}px ${fontName}`;
+    const lineX = getCanvasAlignX(bodyX, bodyW, align);
     const lines = data.item.split('\n');
     lines.forEach((line, index) => {
-        ctx.fillText(line, bodyX, bodyY + (index * lineHeight));
+      const lineY = bodyY + index * fonts.lineHeight;
+      if (lineY + fonts.lineHeight > bodyY + bodyH) return;
+      ctx.fillText(line, lineX, lineY);
     });
+    ctx.restore();
+
     ctx.restore();
   };
 
@@ -553,7 +631,7 @@ function App() {
                 style={{ left: boardPos.x, top: boardPos.y, width: boardSize.width, height: boardSize.height }} 
                 onPointerDown={handlePointerDown}
               >
-                <SignboardCanvas type={boardType} data={boardData} />
+                <SignboardCanvas type={boardType} data={boardData} height={boardSize.height} />
                 {toolMode === 'select' && (
                   <>
                     <div className="absolute bottom-0 right-0 w-6 h-6 bg-blue-500/50 rounded-tl cursor-nwse-resize opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -579,7 +657,9 @@ function App() {
                   fontFamily: '"Noto Sans JP", sans-serif',
                   fontWeight: 'bold',
                   textShadow: '1px 1px 2px rgba(0,0,0,0.5), -1px -1px 2px rgba(255,255,255,0.5)',
-                  whiteSpace: 'pre-wrap'
+                  whiteSpace: 'pre-wrap',
+                  textAlign: label.textAlign ?? 'left',
+                  transform: label.textAlign === 'center' ? 'translateX(-50%)' : label.textAlign === 'right' ? 'translateX(-100%)' : undefined,
                 }}
                 onPointerDown={(e) => handleTextPointerDown(e, label)}
               >
@@ -684,6 +764,15 @@ function App() {
                   />
                 </div>
               </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500">文字揃え</label>
+                <TextAlignButtons
+                  value={newTextAlign}
+                  onChange={setNewTextAlign}
+                  accentClass="border-purple-600 bg-purple-100 text-purple-700"
+                />
+              </div>
               
               <button
                 onClick={handleAddText}
@@ -758,6 +847,14 @@ function App() {
                           className="w-8 h-8 rounded cursor-pointer border-2 border-slate-300"
                         />
                       </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500">文字揃え</label>
+                      <TextAlignButtons
+                        value={label.textAlign ?? 'left'}
+                        onChange={(align) => handleUpdateText(label.id, { textAlign: align })}
+                      />
                     </div>
                   </>
                 );
@@ -879,6 +976,13 @@ function App() {
             )}
           </div>
           <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-500">文字揃え</label>
+              <TextAlignButtons
+                value={boardData.textAlign}
+                onChange={(align) => setBoardData({ ...boardData, textAlign: align })}
+              />
+            </div>
             <div className="space-y-1">
               <label className="text-xs font-bold text-slate-500 flex justify-between"><span>工事名</span><span className="text-[10px] text-slate-400">文字 x{boardData.fontSizeTitle.toFixed(1)}</span></label>
               <div className="relative"><Type className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" /><input type="text" value={boardData.title} onChange={e => setBoardData({...boardData, title: e.target.value})} className="w-full pl-10 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：〇〇新築工事" /></div>

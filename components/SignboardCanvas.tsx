@@ -1,14 +1,21 @@
 import React from 'react';
 import { SignboardData, SignboardType } from '../types';
+import { SIGNBOARD_LAYOUT, getSignboardEmStyles, getTextAlignClass, getFlexJustifyClass } from '../utils/signboardLayout';
 
 interface SignboardCanvasProps {
   type: SignboardType;
   data: SignboardData;
+  height: number;
   className?: string;
   id?: string;
 }
 
-const SignboardCanvas: React.FC<SignboardCanvasProps> = ({ type, data, className = "", id }) => {
+const SignboardCanvas: React.FC<SignboardCanvasProps> = ({ type, data, height, className = "", id }) => {
+  const emStyles = getSignboardEmStyles(data);
+  const baseFontSize = height * SIGNBOARD_LAYOUT.bodyFontRatio;
+  const fieldJustify = getFlexJustifyClass(data.textAlign);
+  const bodyAlign = getTextAlignClass(data.textAlign);
+
   const getStyles = () => {
     switch (type) {
       case SignboardType.BLACKBOARD:
@@ -21,19 +28,23 @@ const SignboardCanvas: React.FC<SignboardCanvasProps> = ({ type, data, className
   const styles = getStyles();
 
   return (
-    <div id={id} className={`select-none overflow-hidden shadow-2xl flex flex-col ${styles.bg} ${styles.text} ${styles.border} ${styles.font} ${className}`} style={{ width: '100%', height: '100%', transformOrigin: 'top left' }}>
+    <div
+      id={id}
+      className={`select-none overflow-hidden shadow-2xl flex flex-col ${styles.bg} ${styles.text} ${styles.border} ${styles.font} ${className}`}
+      style={{ width: '100%', height: '100%', fontSize: baseFontSize, transformOrigin: 'top left' }}
+    >
       <div className={`flex flex-col border-b-2 ${styles.grid} h-[30%]`}>
         <div className={`flex border-b ${styles.grid} h-1/2`}>
-          <div className={`w-[20%] border-r ${styles.grid} flex items-center justify-center text-[0.7em] leading-none p-1 font-bold`}>工事名</div>
-          <div className="flex-1 flex items-center px-2"><span style={{ fontSize: `${0.8 * data.fontSizeTitle}em` }}>{data.title}</span></div>
+          <div className={`w-[20%] border-r ${styles.grid} flex items-center justify-center leading-none p-1 font-bold overflow-hidden`} style={{ fontSize: emStyles.label }}>工事名</div>
+          <div className={`flex-1 flex items-center px-2 overflow-hidden min-w-0 ${fieldJustify}`}><span className="truncate max-w-full" style={{ fontSize: emStyles.title }}>{data.title}</span></div>
         </div>
         <div className="flex h-1/2">
-          <div className={`w-[20%] border-r ${styles.grid} flex items-center justify-center text-[0.7em] leading-none p-1 font-bold`}>場　所</div>
-          <div className="flex-1 flex items-center px-2"><span style={{ fontSize: `${0.8 * data.fontSizeDetails}em` }}>{data.details}</span></div>
+          <div className={`w-[20%] border-r ${styles.grid} flex items-center justify-center leading-none p-1 font-bold overflow-hidden`} style={{ fontSize: emStyles.label }}>場　所</div>
+          <div className={`flex-1 flex items-center px-2 overflow-hidden min-w-0 ${fieldJustify}`}><span className="truncate max-w-full" style={{ fontSize: emStyles.details }}>{data.details}</span></div>
         </div>
       </div>
-      <div className="flex-1 p-3 whitespace-pre-wrap leading-snug text-left overflow-hidden">
-        <span style={{ fontSize: `${0.9 * data.fontSizeItem}em` }}>{data.item}</span>
+      <div className={`flex-1 whitespace-pre-wrap overflow-hidden ${bodyAlign}`} style={{ padding: `${SIGNBOARD_LAYOUT.contentPadRatio * 100}%` }}>
+        <span style={{ fontSize: emStyles.item, lineHeight: emStyles.lineHeight }}>{data.item}</span>
       </div>
     </div>
   );

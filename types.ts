@@ -3,6 +3,8 @@ export enum SignboardType {
   WHITE = 'WHITE'
 }
 
+export type TextAlign = 'left' | 'center' | 'right';
+
 export interface SignboardData {
   title: string;
   item: string;
@@ -10,6 +12,7 @@ export interface SignboardData {
   fontSizeTitle: number;
   fontSizeItem: number;
   fontSizeDetails: number;
+  textAlign: TextAlign;
 }
 
 export interface Position {
